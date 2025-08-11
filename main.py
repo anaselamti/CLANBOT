@@ -1,195 +1,122 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
-import asyncio
+import time
 import os
+import traceback
 
-# --- Discord Bot Settings ---
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ضع التوكن هنا أو في متغير بيئي
-CHANNEL_ID = 1404474899564597308  # رقم الروم اللي ترسل فيه
+chromedriver_path = "/usr/local/bin/chromedriver"
+chrome_binary_path = "/usr/local/chrome-linux/chrome"  # هذا هو المسار الصحيح للكروم بعد التعديل في Dockerfile
+base_url = "https://ffs.gg/statistics.php"
 
 intents = discord.Intents.default()
+intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- Selenium Settings ---
-CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"  # عدل حسب مكان كروم درايفر عندك
-CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"  # عدل حسب مكان كروم عندك
-CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"
+def extract_between(text, start, end):
+    try:
+        return text.split(start)[1].split(end)[0].strip()
+    except IndexError:
+        return "Not found"
 
-def scrape_clan_status():
+def scrape_player(player_name):
     options = webdriver.ChromeOptions()
-    options.binary_location = CHROME_BINARY_PATH
+    options.binary_location = chrome_binary_path
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-
-    service = Service(CHROMEDRIVER_PATH)
+    service = Service(chromedriver_path)
     driver = webdriver.Chrome(service=service, options=options)
 
-    clan_data = {
-        "name": "Goalacticos",
-        "description": "No description available",
-        "tag": "Gs_",
-        "members": "0",
-        "clan_wars": "0",
-        "ranked": "0 - 0W - 0L",
-        "unranked": "0",
-        "win_ratio": "0%",
-        "bank": "$0",
-        "online_players": []
-    }
-
     try:
-        driver.get(CLAN_URL)
+        driver.get(base_url)
+        search_field = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "input.searchField"))
+        )
+        search_field.send_keys(player_name)
+        search_field.send_keys(Keys.RETURN)
+        time.sleep(3)
 
-        wait = WebDriverWait(driver, 15)  # انتظار حتى تحميل العناصر المهمة
+        row = driver.find_element(By.CSS_SELECTOR, "table.stats tbody tr")
+        profile_link = row.find_element(By.CSS_SELECTOR, "td a").get_attribute("href")
 
-        # انتظر حتى تظهر معلومات الأعضاء (مثال)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")))
+        if "member.php" in profile_link:
+            user_id = profile_link.split("u=")[1].split("&")[0]
+            profile_url = f"https://ffs.gg/members/{user_id}-{player_name}"
+        else:
+            profile_url = profile_link.replace("member.php", "members")
 
-        # الوصف
+        driver.get(profile_url)
+        time.sleep(5)
+
         try:
-            desc_element = driver.find_element(By.CSS_SELECTOR, "div[style*='color: rgba(255,255,255,0.5)']")
-            clan_data["description"] = desc_element.text.strip()
-        except NoSuchElementException:
-            pass
+            clan_element = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    "//div[contains(@class,'ww_box') and contains(@class,'profileStats')]//div[contains(text(),'Clan')]/span/b/a"
+                ))
+            )
+            clan = clan_element.text.strip()
+        except:
+            clan = "Unknown"
 
-        # الأعضاء
-        try:
-            members_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")
-            clan_data["members"] = members_element.text.strip()
-        except NoSuchElementException:
-            pass
+        #if clan != "Real Madrid FC":
+         #   return "⚠️ Sorry, this player is not part of the clan Real Madrid FC. You must be a member of this clan to use the bot."
 
-        # حروب الكلان
-        try:
-            wars_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(4) div b")
-            clan_data["clan_wars"] = wars_element.text.strip()
-        except NoSuchElementException:
-            pass
+        body_text = driver.find_element(By.TAG_NAME, "body").text
 
-        # الرانكد
-        try:
-            ranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(5) div b")
-            clan_data["ranked"] = ranked_element.text.strip()
-        except NoSuchElementException:
-            pass
+        username = extract_between(body_text, "Member List", "Log in").split()[-1]
+        nickname = extract_between(body_text, "Name", "Clan")
+        join_date = extract_between(body_text, "last seen", "join date")
+        country = extract_between(body_text, "Country", "Last Visit")
+        carball_points = extract_between(body_text, "CarBall", "Won").split()[0]
+        winning_games = extract_between(body_text, "Won:", "|").split()[0]
+        scored_goals = extract_between(body_text, "Goals:", "|").split()[0]
+        assists = extract_between(body_text, "Assists:", "Saves").split()[0]
+        saved_gk = extract_between(body_text, "Saves:", "|").split()[0]
 
-        # الأنرانكد
-        try:
-            unranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(6) div b")
-            clan_data["unranked"] = unranked_element.text.strip()
-        except NoSuchElementException:
-            pass
+        result_text = (
+            f"🎮 **Player Profile: {username}**\n"
+            f"👥 Clan: {clan}\n"
+            f"🌍 Country: {country}\n"
+            f"📅 Join Date: {join_date}\n"
+            f"🏆 CarBall Points: {carball_points}\n"
+            f"🎯 Wins: {winning_games}\n"
+            f"⚽ Goals: {scored_goals}\n"
+            f"🎖 Assists: {assists}\n"
+            f"🧤 Saves: {saved_gk}\n"
+            f"🔗 [Full Profile]({profile_url})"
+        )
 
-        # نسبة الفوز
-        try:
-            win_ratio_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(7) div b")
-            clan_data["win_ratio"] = win_ratio_element.text.strip()
-        except NoSuchElementException:
-            pass
+        return result_text
 
-        # البنك
-        try:
-            bank_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(8) div b")
-            clan_data["bank"] = bank_element.text.strip()
-        except NoSuchElementException:
-            pass
-
-        # اللاعبين الأونلاين
-        try:
-            player_rows = driver.find_elements(By.CSS_SELECTOR, "table.fullwidth.dark.stats.clan tbody tr:not(.spacer)")
-            clan_data["online_players"] = []
-            for row in player_rows:
-                try:
-                    username = row.find_element(By.CSS_SELECTOR, "td:nth-child(2) a span").text.strip()
-                    server_status = row.find_element(By.CSS_SELECTOR, "td:nth-child(5)").text.strip()
-                    if "Online" in server_status:
-                        clan_data["online_players"].append(username)
-                except NoSuchElementException:
-                    continue
-            clan_data["members"] = str(len(player_rows))
-        except NoSuchElementException:
-            pass
-
-        return clan_data
+    except Exception as e:
+        print(traceback.format_exc())
+        return f"❌ An error occurred: {str(e)}"
 
     finally:
         driver.quit()
 
-last_message_id = None  # لتخزين رسالة التحديث الأخيرة
-
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    send_clan_update.start()
-
-
-@tasks.loop(seconds=45)
-async def send_clan_update():
-    global last_message_id
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel is None:
-        print("Could not find the channel.")
+@bot.command(name="ffs")
+async def ffs(ctx, player_name: str = None, arena: str = None):
+    if not player_name:
+        await ctx.send("❌ Please provide the player name. Example: `!ffs anasmorocco cb`")
         return
 
-    try:
-        clan_data = await asyncio.to_thread(scrape_clan_status)
+    await ctx.send(f"🔍 Searching for player **{player_name}**... This may take a few seconds.")
 
-        online_count = len(clan_data["online_players"])
-        members_count = clan_data["members"]
-        online_list = ", ".join(clan_data["online_players"]) if online_count > 0 else "No players are currently online."
+    result = scrape_player(player_name)
+    await ctx.send(result)
 
-        embed = discord.Embed(
-            title=f"🛡️ {clan_data['name']} [{clan_data['tag']}]",
-            description=clan_data["description"],
-            color=0xdaa520
-        )
-        embed.add_field(
-            name="📊 Clan Statistics",
-            value=(
-                f"👥 Members: {members_count}\n"
-                f"⚔️ Clan Wars: {clan_data['clan_wars']}\n"
-                f"🏆 Ranked: {clan_data['ranked']}\n"
-                f"🔓 Unranked: {clan_data['unranked']}\n"
-                f"📈 Win Ratio: {clan_data['win_ratio']}\n"
-                f"💰 Bank Balance: {clan_data['bank']}"
-            ),
-            inline=False
-        )
-        embed.add_field(
-            name=f"👤 Members Status ({online_count}/{members_count})",
-            value=online_list,
-            inline=False
-        )
+@bot.command(name="info")
+async def info(ctx):
+    await ctx.send("Use `!ffs <player_name> <mode>` to get player stats. Example: `!ffs anasmorocco cb`")
 
-        # تحديث رسالة موجودة أو إرسال رسالة جديدة
-        if last_message_id is None:
-            msg = await channel.send(embed=embed)
-            last_message_id = msg.id
-        else:
-            try:
-                msg = await channel.fetch_message(last_message_id)
-                await msg.edit(embed=embed)
-            except discord.NotFound:
-                # إذا تم حذف الرسالة سابقًا أرسل رسالة جديدة
-                msg = await channel.send(embed=embed)
-                last_message_id = msg.id
-
-        print("Clan status updated.")
-
-    except Exception as e:
-        print(f"Error while updating clan data: {e}")
-
-
-if __name__ == "__main__":
-    bot.run(DISCORD_BOT_TOKEN)
+bot.run(os.getenv("DISCORD_BOT_TOKEN"))
