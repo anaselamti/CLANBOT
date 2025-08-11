@@ -7,7 +7,6 @@ from selenium.common.exceptions import NoSuchElementException
 import time
 import os
 
-# إعدادات مسارات كروم وكروم درايفر
 CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"
 CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"
 
@@ -15,9 +14,11 @@ CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"
 TARGET_CHANNEL_ID = 1404443185048064011
 
 intents = discord.Intents.default()
+intents.message_content = True  # مهم تفعيل هذا لكي يستطيع البوت قراءة الرسائل إذا احتاج
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-status_message = None
+status_message = None  # لتعريفها على مستوى الملف
 
 def scrape_clan_status():
     options = webdriver.ChromeOptions()
@@ -32,7 +33,7 @@ def scrape_clan_status():
 
     try:
         driver.get(CLAN_URL)
-        time.sleep(5)  # زيادة وقت الانتظار لتحميل الصفحة
+        time.sleep(5)  # زيادة الوقت أحياناً ضروري لصفحات ثقيلة
 
         clan_data = {
             "name": "غير معروف",
@@ -48,196 +49,151 @@ def scrape_clan_status():
             "online_players": []
         }
 
-        try:
-            # استخراج اسم الكلان
-            clan_name_element = driver.find_element(By.XPATH, "//span[contains(@style, 'color: rgb(185,164,94)') and contains(@style, 'font-size: 20px')]/b")
-            clan_data["name"] = clan_name_element.text.strip()
-        except NoSuchElementException:
-            print("⚠️ لم يتم العثور على اسم الكلان")
+        # بعض العناصر قد لا تظهر دائماً لذا نستخدم try-except
 
         try:
-            # استخراج وصف الكلان
-            description_element = driver.find_element(By.XPATH, "//span[contains(@style, 'color: rgba(255,255,255,0.5)')]")
+            clan_name_element = driver.find_element(By.XPATH, "//span[contains(@style,'color: rgb(185,164,94)') and contains(@style,'font-size: 20px')]/b")
+            clan_data["name"] = clan_name_element.text.strip()
+        except NoSuchElementException:
+            pass
+
+        try:
+            description_element = driver.find_element(By.XPATH, "//span[contains(@style,'color: rgba(255,255,255,0.5)')]")
             clan_data["description"] = description_element.text.strip()
-            
-            # استخراج رابط الديسكورد من الوصف إذا وجد
+            # البحث عن رابط ديسكورد في الوصف
             if "discord.gg/" in clan_data["description"]:
                 start = clan_data["description"].find("https://discord.gg/")
                 if start != -1:
                     end = clan_data["description"].find(" ", start)
                     clan_data["discord"] = clan_data["description"][start:end if end != -1 else None].strip()
         except NoSuchElementException:
-            print("⚠️ لم يتم العثور على وصف الكلان")
+            pass
 
         try:
-            # استخراج تاج الكلان
-            clan_tag_element = driver.find_element(By.XPATH, "//span[contains(@style, 'color: rgb(185,164,94)') and contains(@style, 'text-shadow')]")
+            clan_tag_element = driver.find_element(By.XPATH, "//span[contains(@style,'color: rgb(185,164,94)') and contains(@style,'text-shadow')]")
             clan_data["tag"] = clan_tag_element.text.strip()
         except NoSuchElementException:
-            print("⚠️ لم يتم العثور على تاج الكلان")
+            pass
 
         try:
-            # استخراج عدد الأعضاء
-            members_element = driver.find_element(By.XPATH, "//div[contains(., 'members')]/div/b")
+            members_element = driver.find_element(By.XPATH, "//div[contains(text(),'members')]/div/b")
             clan_data["members"] = members_element.text.strip()
         except NoSuchElementException:
-            print("⚠️ لم يتم العثور على عدد الأعضاء")
+            pass
 
         try:
-            # استخراج عدد حروب الكلان
-            wars_element = driver.find_element(By.XPATH, "//div[contains(., 'clan wars')]/div/b")
+            wars_element = driver.find_element(By.XPATH, "//div[contains(text(),'clan wars')]/div/b")
             clan_data["clan_wars"] = wars_element.text.strip()
         except NoSuchElementException:
-            print("⚠️ لم يتم العثور على عدد حروب الكلان")
+            pass
 
         try:
-            # استخراج حالة الرانكد
-            ranked_element = driver.find_element(By.XPATH, "//div[contains(., 'ranked')]/div/b")
+            ranked_element = driver.find_element(By.XPATH, "//div[contains(text(),'ranked')]/div/b")
             clan_data["ranked"] = ranked_element.text.strip()
         except NoSuchElementException:
-            print("⚠️ لم يتم العثور على حالة الرانكد")
+            pass
 
         try:
-            # استخراج حالة الأنرانكد
-            unranked_element = driver.find_element(By.XPATH, "//div[contains(., 'unranked')]/div/b")
+            unranked_element = driver.find_element(By.XPATH, "//div[contains(text(),'unranked')]/div/b")
             clan_data["unranked"] = unranked_element.text.strip()
         except NoSuchElementException:
-            print("⚠️ لم يتم العثور على حالة الأنرانكد")
+            pass
 
         try:
-            # استخراج نسبة الفوز
-            win_ratio_element = driver.find_element(By.XPATH, "//div[contains(., 'win ratio')]/div/b")
+            win_ratio_element = driver.find_element(By.XPATH, "//div[contains(text(),'win ratio')]/div/b")
             clan_data["win_ratio"] = win_ratio_element.text.strip()
         except NoSuchElementException:
-            print("⚠️ لم يتم العثور على نسبة الفوز")
+            pass
 
         try:
-            # استخراج رصيد البنك
-            bank_element = driver.find_element(By.XPATH, "//div[contains(., 'bank')]/div/b")
+            bank_element = driver.find_element(By.XPATH, "//div[contains(text(),'bank')]/div/b")
             clan_data["bank"] = bank_element.text.strip()
         except NoSuchElementException:
-            print("⚠️ لم يتم العثور على رصيد البنك")
+            pass
 
+        # استخراج اللاعبين الأونلاين
         try:
-            # استخراج معلومات الأعضاء من الجدول
             rows = driver.find_elements(By.CSS_SELECTOR, "table.stats tbody tr:not(.spacer)")
-            
             for row in rows:
                 try:
-                    # استخراج اسم اللاعب
                     username_element = row.find_element(By.CSS_SELECTOR, "td:nth-child(2) a span")
                     username = username_element.text.strip()
-                    
-                    # استخراج حالة السيرفر
                     server_status_element = row.find_element(By.CSS_SELECTOR, "td:nth-child(5)")
-                    server_status = server_status_element.text.strip()
-                    
-                    # التحقق من حالة الأونلاين
-                    if "Online" in server_status:
+                    server_status = server_status_element.text.strip().lower()
+                    if "online" in server_status or "in-game" in server_status:
                         clan_data["online_players"].append(username)
-                        
-                except NoSuchElementException:
+                except Exception:
                     continue
-                except Exception as e:
-                    print(f"⚠️ خطأ في معالجة صف اللاعب: {e}")
-                    continue
-                    
         except NoSuchElementException:
-            print("⚠️ لم يتم العثور على جدول الأعضاء")
+            pass
 
         return clan_data
-
     except Exception as e:
-        print(f"❌ حدث خطأ جسيم أثناء جلب البيانات: {e}")
-        return {
-            "name": "خطأ في جلب البيانات",
-            "description": "N/A",
-            "tag": "N/A",
-            "members": "0",
-            "clan_wars": "0",
-            "ranked": "N/A",
-            "unranked": "0",
-            "win_ratio": "0%",
-            "bank": "$0",
-            "discord": "N/A",
-            "online_players": []
-        }
+        print(f"❌ خطأ في جلب بيانات الكلان: {e}")
+        return None
     finally:
         driver.quit()
 
 @tasks.loop(minutes=2)
 async def update_clan_status():
     global status_message
+    clan_data = scrape_clan_status()
+    if not clan_data:
+        print("❌ لم أتمكن من جلب بيانات الكلان.")
+        return
+
+    embed = discord.Embed(
+        title=f"🛡️ {clan_data['name']} [{clan_data['tag']}]",
+        description=f"📜 **الوصف:**\n{clan_data['description']}\n\n"
+                    f"🔗 **رابط الديسكورد:** {clan_data['discord']}",
+        color=discord.Color.gold()
+    )
+
+    embed.add_field(
+        name="📊 إحصائيات الكلان",
+        value=(
+            f"👥 **الأعضاء:** {clan_data['members']}\n"
+            f"⚔️ **حروب الكلان:** {clan_data['clan_wars']}\n"
+            f"🏆 **الرانكد:** {clan_data['ranked']}\n"
+            f"🔓 **الأنرانكد:** {clan_data['unranked']}\n"
+            f"📈 **نسبة الفوز:** {clan_data['win_ratio']}\n"
+            f"💰 **رصيد البنك:** {clan_data['bank']}"
+        ),
+        inline=True
+    )
+
+    online_count = len(clan_data['online_players'])
+    total_members = clan_data['members']
+
+    embed.add_field(
+        name=f"👤 حالة الأعضاء ({online_count}/{total_members})",
+        value="\n".join(f"- {player}" for player in clan_data['online_players']) if online_count > 0 else "لا يوجد لاعبون أونلاين حالياً.",
+        inline=False
+    )
+
+    embed.set_thumbnail(url="https://i.imgur.com/J1wY8Kp.png")
+
+    channel = bot.get_channel(TARGET_CHANNEL_ID)
+    if not channel:
+        print("❌ لم أتمكن من العثور على الروم المحدد.")
+        return
 
     try:
-        clan_data = scrape_clan_status()
-
-        # إنشاء وصف الرسالة
-        embed = discord.Embed(
-            title=f"🛡️ {clan_data['name']} [{clan_data['tag']}]",
-            description=f"📜 **الوصف:**\n{clan_data['description']}\n\n"
-                      f"🔗 **رابط الديسكورد:** {clan_data['discord']}",
-            color=discord.Color.gold()
-        )
-        
-        # إضافة معلومات الكلان
-        embed.add_field(
-            name="📊 إحصائيات الكلان",
-            value=f"👥 **الأعضاء:** {clan_data['members']}\n"
-                 f"⚔️ **حروب الكلان:** {clan_data['clan_wars']}\n"
-                 f"🏆 **الرانكد:** {clan_data['ranked']}\n"
-                 f"🔓 **الأنرانكد:** {clan_data['unranked']}\n"
-                 f"📈 **نسبة الفوز:** {clan_data['win_ratio']}\n"
-                 f"💰 **رصيد البنك:** {clan_data['bank']}",
-            inline=True
-        )
-        
-        # إضافة اللاعبين الأونلاين
-        online_status = "🟢 **اللاعبون الأونلاين:**\n"
-        if clan_data['online_players']:
-            online_status += "\n".join(f"- {player}" for player in clan_data['online_players'])
-        else:
-            online_status += "لا يوجد لاعبون أونلاين حالياً."
-            
-        embed.add_field(
-            name=f"👤 حالة الأعضاء ({len(clan_data['online_players']}/{clan_data['members']})",
-            value=online_status,
-            inline=True
-        )
-
-        # إضافة صورة مصغرة إذا وجدت
-        embed.set_thumbnail(url="https://i.imgur.com/J1wY8Kp.png")
-
-        channel = bot.get_channel(TARGET_CHANNEL_ID)
-        if not channel:
-            print("❌ لم يتم العثور على الروم المحدد")
-            return
-
         if status_message:
-            try:
-                await status_message.edit(embed=embed)
-            except discord.NotFound:
-                status_message = await channel.send(embed=embed)
+            await status_message.edit(embed=embed)
         else:
             status_message = await channel.send(embed=embed)
-
-    except Exception as e:
-        print(f"❌ حدث خطأ أثناء تحديث الحالة: {e}")
+    except discord.NotFound:
+        # في حالة تم حذف الرسالة القديمة، نرسل رسالة جديدة
+        status_message = await channel.send(embed=embed)
 
 @bot.event
 async def on_ready():
     global status_message
     print(f"✅ تم تسجيل الدخول باسم {bot.user}")
-    
-    # إضافة intent لقراءة محتوى الرسائل
-    intents.message_content = True
-    
     channel = bot.get_channel(TARGET_CHANNEL_ID)
     if channel:
-        try:
-            status_message = await channel.send("⏳ جاري تحميل بيانات الكلان...")
-            update_clan_status.start()
-        except Exception as e:
-            print(f"❌ حدث خطأ أثناء الإرسال الأولي: {e}")
+        status_message = await channel.send("⏳ جاري تحميل بيانات الكلان...")
+    update_clan_status.start()
 
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
