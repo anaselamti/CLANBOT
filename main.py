@@ -3,23 +3,22 @@ from discord.ext import commands, tasks
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.common.exceptions import NoSuchElementException
 import asyncio
 import os
+import time
 
 # --- Discord Bot Settings ---
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ضع التوكن هنا أو في متغير بيئي
-CHANNEL_ID = 1404474899564597308  # رقم الروم اللي ترسل فيه
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ضع توكن البوت هنا أو كمتغير بيئة
+CHANNEL_ID = 1404443185048064011  # ID القناة التي سترسل فيها الرسائل
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- Selenium Settings ---
-CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"  # عدل حسب مكان كروم درايفر عندك
-CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"  # عدل حسب مكان كروم عندك
-CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"
+CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"  # مسار ChromeDriver عندك
+CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"  # مسار كروم عندك
+CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"  # رابط صفحة الكلان
 
 def scrape_clan_status():
     options = webdriver.ChromeOptions()
@@ -35,9 +34,9 @@ def scrape_clan_status():
     driver = webdriver.Chrome(service=service, options=options)
 
     clan_data = {
-        "name": "Goalacticos",
+        "name": "Goalacticos",  # اسم ثابت كما طلبت
         "description": "No description available",
-        "tag": "Gs_",
+        "tag": "Gs_",  # تاج ثابت
         "members": "0",
         "clan_wars": "0",
         "ranked": "0 - 0W - 0L",
@@ -49,11 +48,7 @@ def scrape_clan_status():
 
     try:
         driver.get(CLAN_URL)
-
-        wait = WebDriverWait(driver, 15)  # انتظار حتى تحميل العناصر المهمة
-
-        # انتظر حتى تظهر معلومات الأعضاء (مثال)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")))
+        time.sleep(7)  # انتظر تحميل الصفحة
 
         # الوصف
         try:
@@ -62,12 +57,12 @@ def scrape_clan_status():
         except NoSuchElementException:
             pass
 
-        # الأعضاء
+        # عدد الأعضاء (رسمياً من الصفحة)
         try:
             members_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")
             clan_data["members"] = members_element.text.strip()
         except NoSuchElementException:
-            pass
+            clan_data["members"] = "0"
 
         # حروب الكلان
         try:
@@ -104,7 +99,7 @@ def scrape_clan_status():
         except NoSuchElementException:
             pass
 
-        # اللاعبين الأونلاين
+        # اللاعبين المتصلين (من الجدول)
         try:
             player_rows = driver.find_elements(By.CSS_SELECTOR, "table.fullwidth.dark.stats.clan tbody tr:not(.spacer)")
             clan_data["online_players"] = []
@@ -116,27 +111,24 @@ def scrape_clan_status():
                         clan_data["online_players"].append(username)
                 except NoSuchElementException:
                     continue
-            clan_data["members"] = str(len(player_rows))
         except NoSuchElementException:
-            pass
+            clan_data["online_players"] = []
 
         return clan_data
 
     finally:
         driver.quit()
 
-last_message_id = None  # لتخزين رسالة التحديث الأخيرة
-
+last_message = None  # لتخزين رسالة التحديث والقيام بالتعديل عليها لاحقًا
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     send_clan_update.start()
 
-
 @tasks.loop(seconds=45)
 async def send_clan_update():
-    global last_message_id
+    global last_message
     channel = bot.get_channel(CHANNEL_ID)
     if channel is None:
         print("Could not find the channel.")
@@ -172,24 +164,15 @@ async def send_clan_update():
             inline=False
         )
 
-        # تحديث رسالة موجودة أو إرسال رسالة جديدة
-        if last_message_id is None:
-            msg = await channel.send(embed=embed)
-            last_message_id = msg.id
+        if last_message is None:
+            last_message = await channel.send(embed=embed)
         else:
-            try:
-                msg = await channel.fetch_message(last_message_id)
-                await msg.edit(embed=embed)
-            except discord.NotFound:
-                # إذا تم حذف الرسالة سابقًا أرسل رسالة جديدة
-                msg = await channel.send(embed=embed)
-                last_message_id = msg.id
+            await last_message.edit(embed=embed)
 
         print("Clan status updated.")
 
     except Exception as e:
         print(f"Error while updating clan data: {e}")
-
 
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
