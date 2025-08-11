@@ -79,7 +79,7 @@ def scrape_player(player_name):
         )
         search_field.send_keys(player_name)
         search_field.send_keys(Keys.RETURN)
-        time.sleep(3)
+        time.sleep(10)
 
         row = driver.find_element(By.CSS_SELECTOR, "table.stats tbody tr")
         profile_link = row.find_element(By.CSS_SELECTOR, "td a").get_attribute("href")
@@ -91,7 +91,7 @@ def scrape_player(player_name):
             profile_url = profile_link.replace("member.php", "members")
 
         driver.get(profile_url)
-        time.sleep(5)
+        time.sleep(10)
 
         body_text = driver.find_element(By.TAG_NAME, "body").text
 
