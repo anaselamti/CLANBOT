@@ -16,6 +16,7 @@ RUN wget https://storage.googleapis.com/chrome-for-testing-public/114.0.5735.90/
     && mv /usr/local/chrome-linux64 /usr/local/chrome-linux
 
 ENV PATH="/usr/local/chrome-linux:${PATH}"
+ENV CHROME_BIN="/usr/local/chrome-linux/chrome"
 
 # تحميل وتثبيت ChromeDriver
 RUN wget https://chromedriver.storage.googleapis.com/114.0.5735.90/chromedriver_linux64.zip \
@@ -26,7 +27,7 @@ RUN wget https://chromedriver.storage.googleapis.com/114.0.5735.90/chromedriver_
 WORKDIR /app
 COPY . /app
 
-# تثبيت مكتبات Python المطلوبة عبر pip
-RUN pip install --no-cache-dir matplotlib discord selenium
+# تثبيت مكتبات Python من ملف المتطلبات
+RUN pip install --no-cache-dir -r requirements.txt
 
 CMD ["python", "main.py"]
