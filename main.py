@@ -5,21 +5,21 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 import asyncio
 import os
 
 # --- Discord Bot Settings ---
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ضع توكن البوت هنا أو متغير بيئة
-CHANNEL_ID = 1404474899564597308  # ID القناة التي سترسل فيها الرسائل
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ضع التوكن هنا أو في متغير بيئي
+CHANNEL_ID = 1404474899564597308  # رقم الروم اللي ترسل فيه
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- Selenium Settings ---
-CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"  # عدل حسب مسار chromedriver عندك
-CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"  # عدل حسب مسار كروم عندك
-CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"  # رابط صفحة الكلان
+CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"  # عدل حسب مكان كروم درايفر عندك
+CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"  # عدل حسب مكان كروم عندك
+CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"
 
 def scrape_clan_status():
     options = webdriver.ChromeOptions()
@@ -50,51 +50,61 @@ def scrape_clan_status():
     try:
         driver.get(CLAN_URL)
 
-        wait = WebDriverWait(driver, 15)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[style*='color: rgba(255,255,255,0.5)']")))
+        wait = WebDriverWait(driver, 15)  # انتظار حتى تحميل العناصر المهمة
 
+        # انتظر حتى تظهر معلومات الأعضاء (مثال)
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")))
+
+        # الوصف
         try:
             desc_element = driver.find_element(By.CSS_SELECTOR, "div[style*='color: rgba(255,255,255,0.5)']")
-            if desc_element.text.strip():
-                clan_data["description"] = desc_element.text.strip()
+            clan_data["description"] = desc_element.text.strip()
         except NoSuchElementException:
             pass
 
+        # الأعضاء
+        try:
+            members_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")
+            clan_data["members"] = members_element.text.strip()
+        except NoSuchElementException:
+            pass
+
+        # حروب الكلان
         try:
             wars_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(4) div b")
-            if wars_element.text.strip():
-                clan_data["clan_wars"] = wars_element.text.strip()
+            clan_data["clan_wars"] = wars_element.text.strip()
         except NoSuchElementException:
             pass
 
+        # الرانكد
         try:
             ranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(5) div b")
-            if ranked_element.text.strip():
-                clan_data["ranked"] = ranked_element.text.strip()
+            clan_data["ranked"] = ranked_element.text.strip()
         except NoSuchElementException:
             pass
 
+        # الأنرانكد
         try:
             unranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(6) div b")
-            if unranked_element.text.strip():
-                clan_data["unranked"] = unranked_element.text.strip()
+            clan_data["unranked"] = unranked_element.text.strip()
         except NoSuchElementException:
             pass
 
+        # نسبة الفوز
         try:
             win_ratio_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(7) div b")
-            if win_ratio_element.text.strip():
-                clan_data["win_ratio"] = win_ratio_element.text.strip()
+            clan_data["win_ratio"] = win_ratio_element.text.strip()
         except NoSuchElementException:
             pass
 
+        # البنك
         try:
             bank_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(8) div b")
-            if bank_element.text.strip():
-                clan_data["bank"] = bank_element.text.strip()
+            clan_data["bank"] = bank_element.text.strip()
         except NoSuchElementException:
             pass
 
+        # اللاعبين الأونلاين
         try:
             player_rows = driver.find_elements(By.CSS_SELECTOR, "table.fullwidth.dark.stats.clan tbody tr:not(.spacer)")
             clan_data["online_players"] = []
@@ -108,24 +118,25 @@ def scrape_clan_status():
                     continue
             clan_data["members"] = str(len(player_rows))
         except NoSuchElementException:
-            clan_data["online_players"] = []
-            clan_data["members"] = "0"
+            pass
 
         return clan_data
 
     finally:
         driver.quit()
 
-last_message = None
+last_message_id = None  # لتخزين رسالة التحديث الأخيرة
+
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     send_clan_update.start()
 
+
 @tasks.loop(seconds=45)
 async def send_clan_update():
-    global last_message
+    global last_message_id
     channel = bot.get_channel(CHANNEL_ID)
     if channel is None:
         print("Could not find the channel.")
@@ -161,15 +172,24 @@ async def send_clan_update():
             inline=False
         )
 
-        if last_message is None:
-            last_message = await channel.send(embed=embed)
+        # تحديث رسالة موجودة أو إرسال رسالة جديدة
+        if last_message_id is None:
+            msg = await channel.send(embed=embed)
+            last_message_id = msg.id
         else:
-            await last_message.edit(embed=embed)
+            try:
+                msg = await channel.fetch_message(last_message_id)
+                await msg.edit(embed=embed)
+            except discord.NotFound:
+                # إذا تم حذف الرسالة سابقًا أرسل رسالة جديدة
+                msg = await channel.send(embed=embed)
+                last_message_id = msg.id
 
         print("Clan status updated.")
 
     except Exception as e:
         print(f"Error while updating clan data: {e}")
+
 
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
