@@ -1,18 +1,18 @@
-import os
-import asyncio
+import discord
 from discord.ext import commands
+import os
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchElementException
+import asyncio
 import time
 
-# إعدادات ChromeDriver وChrome (عدّل المسارات حسب بيئتك)
-CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"
-CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"
-CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"
+# إعدادات Selenium
+CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"  # عدل حسب مسار كروم درايفر عندك
+CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"  # عدل حسب مسار كروم عندك
+CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"  # رابط الكلان
 
-# دالة سكراب الكلان
 def scrape_clan_status():
     options = webdriver.ChromeOptions()
     options.binary_location = CHROME_BINARY_PATH
@@ -42,62 +42,45 @@ def scrape_clan_status():
 
     try:
         driver.get(CLAN_URL)
-        time.sleep(7)
+        time.sleep(7)  # انتظر تحميل الصفحة
 
+        # استخراج البيانات
         try:
             clan_data["name"] = driver.find_element(By.CSS_SELECTOR, "div[style*='font-size: 20px'] > b").text.strip()
         except NoSuchElementException:
             pass
-
         try:
-            desc_element = driver.find_element(By.CSS_SELECTOR, "div[style*='color: rgba(255,255,255,0.5)']")
-            clan_data["description"] = desc_element.text.strip()
+            clan_data["description"] = driver.find_element(By.CSS_SELECTOR, "div[style*='color: rgba(255,255,255,0.5)']").text.strip()
         except NoSuchElementException:
             pass
-
         try:
-            tag_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(2) div b span")
-            clan_data["tag"] = tag_element.text.strip()
+            clan_data["tag"] = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(2) div b span").text.strip()
         except NoSuchElementException:
             pass
-
         try:
-            members_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")
-            clan_data["members"] = members_element.text.strip()
+            clan_data["members"] = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b").text.strip()
         except NoSuchElementException:
             pass
-
         try:
-            wars_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(4) div b")
-            clan_data["clan_wars"] = wars_element.text.strip()
+            clan_data["clan_wars"] = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(4) div b").text.strip()
         except NoSuchElementException:
             pass
-
         try:
-            ranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(5) div b")
-            clan_data["ranked"] = ranked_element.text.strip()
+            clan_data["ranked"] = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(5) div b").text.strip()
         except NoSuchElementException:
             pass
-
         try:
-            unranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(6) div b")
-            clan_data["unranked"] = unranked_element.text.strip()
+            clan_data["unranked"] = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(6) div b").text.strip()
         except NoSuchElementException:
             pass
-
         try:
-            win_ratio_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(7) div b")
-            clan_data["win_ratio"] = win_ratio_element.text.strip()
+            clan_data["win_ratio"] = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(7) div b").text.strip()
         except NoSuchElementException:
             pass
-
         try:
-            bank_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(8) div b")
-            clan_data["bank"] = bank_element.text.strip()
+            clan_data["bank"] = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(8) div b").text.strip()
         except NoSuchElementException:
             pass
-
-        # استخراج اللاعبين الأونلاين من الجدول
         try:
             player_rows = driver.find_elements(By.CSS_SELECTOR, "table.fullwidth.dark.stats.clan tbody tr:not(.spacer)")
             for row in player_rows:
@@ -112,49 +95,48 @@ def scrape_clan_status():
             pass
 
         clan_data["members"] = str(len(player_rows))
-
         return clan_data
-
     finally:
         driver.quit()
 
-# إعداد بوت الديسكورد
-intents = commands.Intents.default()
-intents.message_content = True  # ضروري لقراءة الرسائل
-bot = commands.Bot(command_prefix='!', intents=intents)
+# إعدادات بوت الديسكورد مع intents
+intents = discord.Intents.default()
+intents.members = True  # إذا تحتاج معلومات الأعضاء
+
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user}!')
+    print(f"✅ تم تسجيل الدخول كـ: {bot.user}")
 
+# أمر !clan لجلب وعرض بيانات الكلان
 @bot.command()
 async def clan(ctx):
-    await ctx.send("جارِ جلب بيانات الكلان، يرجى الانتظار...")
-    clan_data = await asyncio.to_thread(scrape_clan_status)
+    await ctx.send("⏳ جارٍ جلب بيانات الكلان، الرجاء الانتظار...")
+    loop = asyncio.get_event_loop()
+    clan_data = await loop.run_in_executor(None, scrape_clan_status)  # تشغيل الدالة في Thread منفصل لأن Selenium blocking
 
     online_count = len(clan_data["online_players"])
     members_count = clan_data["members"]
 
-    online_players = ", ".join(clan_data["online_players"]) if online_count > 0 else "لا يوجد لاعبون أونلاين حالياً."
+    online_list = ", ".join(clan_data["online_players"]) if online_count > 0 else "لا يوجد لاعبون أونلاين حالياً."
 
-    message = (
-        f"**🛡️ اسم الكلان:** {clan_data['name']}\n"
-        f"**📜 الوصف:**\n{clan_data['description']}\n"
-        f"**🏷️ التاج:** {clan_data['tag']}\n"
-        f"**👥 الأعضاء:** {members_count}\n"
-        f"**⚔️ حروب الكلان:** {clan_data['clan_wars']}\n"
-        f"**🏆 الرانكد:** {clan_data['ranked']}\n"
-        f"**🔓 الأنرانكد:** {clan_data['unranked']}\n"
-        f"**📈 نسبة الفوز:** {clan_data['win_ratio']}\n"
-        f"**💰 رصيد البنك:** {clan_data['bank']}\n"
-        f"**👤 حالة الأعضاء ({online_count}/{members_count}):**\n{online_players}"
-    )
+    embed = discord.Embed(title=f"🛡️ {clan_data['name']} [{clan_data['tag']}]", description=clan_data["description"], color=0xdaa520)
+    embed.add_field(name="📊 إحصائيات الكلان", value=(
+        f"👥 الأعضاء: {members_count}\n"
+        f"⚔️ حروب الكلان: {clan_data['clan_wars']}\n"
+        f"🏆 الرانكد: {clan_data['ranked']}\n"
+        f"🔓 الأنرانكد: {clan_data['unranked']}\n"
+        f"📈 نسبة الفوز: {clan_data['win_ratio']}\n"
+        f"💰 رصيد البنك: {clan_data['bank']}"
+    ), inline=False)
+    embed.add_field(name=f"👤 حالة الأعضاء ({online_count}/{members_count})", value=online_list, inline=False)
 
-    await ctx.send(message)
+    await ctx.send(embed=embed)
 
-# شغل البوت مع توكن من متغير بيئي
-bot_token = os.getenv("DISCORD_BOT_TOKEN")
-if not bot_token:
-    print("ERROR: Please set the DISCORD_BOT_TOKEN environment variable.")
-else:
-    bot.run(bot_token)
+if __name__ == "__main__":
+    token = os.getenv("DISCORD_BOT_TOKEN")
+    if not token:
+        print("❌ خطأ: لم يتم تعيين توكن البوت في متغير البيئة DISCORD_BOT_TOKEN")
+    else:
+        bot.run(token)
