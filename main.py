@@ -10,7 +10,7 @@ import time
 
 # --- Discord Bot Settings ---
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ضع توكن البوت هنا أو كمتغير بيئة
-CHANNEL_ID = 1404443185048064011  # ID القناة التي سترسل فيها الرسائل
+CHANNEL_ID = 1404474899564597308  # ID القناة التي سترسل فيها الرسائل
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
