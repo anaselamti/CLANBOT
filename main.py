@@ -15,11 +15,12 @@ CHANNEL_ID = 1404443185048064011  # The channel ID where the bot will send messa
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+message_id = None  # لتخزين معرف الرسالة التي نرسلها ليتم تحديثها
 
 # --- Selenium Settings ---
-CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"  # Adjust to your ChromeDriver path
-CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"  # Adjust to your Chrome path
-CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"  # Clan page URL
+CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"
+CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"
+CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"
 
 def scrape_clan_status():
     options = webdriver.ChromeOptions()
@@ -35,9 +36,9 @@ def scrape_clan_status():
     driver = webdriver.Chrome(service=service, options=options)
 
     clan_data = {
-        "name": "Goalacticos",  # Fixed name as requested
+        "name": "Goalacticos",
         "description": "No description available",
-        "tag": "Gs_",  # Fixed tag
+        "tag": "Gs_",
         "members": "0",
         "clan_wars": "0",
         "ranked": "0 - 0W - 0L",
@@ -49,58 +50,50 @@ def scrape_clan_status():
 
     try:
         driver.get(CLAN_URL)
-        time.sleep(7)  # Wait for page to load
+        time.sleep(7)
 
-        # Description
         try:
             desc_element = driver.find_element(By.CSS_SELECTOR, "div[style*='color: rgba(255,255,255,0.5)']")
             clan_data["description"] = desc_element.text.strip()
         except NoSuchElementException:
             pass
 
-        # Members
         try:
             members_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")
             clan_data["members"] = members_element.text.strip()
         except NoSuchElementException:
             pass
 
-        # Clan wars
         try:
             wars_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(4) div b")
             clan_data["clan_wars"] = wars_element.text.strip()
         except NoSuchElementException:
             pass
 
-        # Ranked
         try:
             ranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(5) div b")
             clan_data["ranked"] = ranked_element.text.strip()
         except NoSuchElementException:
             pass
 
-        # Unranked
         try:
             unranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(6) div b")
             clan_data["unranked"] = unranked_element.text.strip()
         except NoSuchElementException:
             pass
 
-        # Win ratio
         try:
             win_ratio_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(7) div b")
             clan_data["win_ratio"] = win_ratio_element.text.strip()
         except NoSuchElementException:
             pass
 
-        # Bank
         try:
             bank_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(8) div b")
             clan_data["bank"] = bank_element.text.strip()
         except NoSuchElementException:
             pass
 
-        # Online players
         try:
             player_rows = driver.find_elements(By.CSS_SELECTOR, "table.fullwidth.dark.stats.clan tbody tr:not(.spacer)")
             clan_data["online_players"] = []
@@ -121,15 +114,14 @@ def scrape_clan_status():
     finally:
         driver.quit()
 
-
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     send_clan_update.start()
 
-
-@tasks.loop(seconds=45)
+@tasks.loop(seconds=60)
 async def send_clan_update():
+    global message_id
     channel = bot.get_channel(CHANNEL_ID)
     if channel is None:
         print("Could not find the channel.")
@@ -165,12 +157,17 @@ async def send_clan_update():
             inline=False
         )
 
-        await channel.send(embed=embed)
+        if message_id is None:
+            msg = await channel.send(embed=embed)
+            message_id = msg.id
+        else:
+            msg = await channel.fetch_message(message_id)
+            await msg.edit(embed=embed)
+
         print("Clan status updated.")
 
     except Exception as e:
         print(f"Error while updating clan data: {e}")
-
 
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
