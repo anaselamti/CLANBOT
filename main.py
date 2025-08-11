@@ -3,42 +3,57 @@ from discord.ext import commands, tasks
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
-import time
-import os
-import traceback
 import asyncio
+import traceback
+import os
+import time
+import aiosqlite
 from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
-from io import BytesIO
-import random
+from PIL import Image, ImageDraw, ImageFont
+import io
 
-# --- Discord Bot Settings ---
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-# --- Selenium Settings ---
+# --- إعدادات Chrome و Selenium ---
 CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"
-CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"
+CHROME_BINARY_PATH = "/usr/local/chrome-linux/chrome"  
 BASE_URL = "https://ffs.gg/statistics.php"
-CLAN_URL = "https://ffs.gg/clans.php?clanid=2915"
 
-# --- Database Simulation ---
-player_stats_db = {}  # سيكون تخزين البيانات في الذاكرة، يمكن استبداله بقاعدة بيانات حقيقية
-clan_challenges = {}
-achievements = {}
+# --- إعدادات Discord ---
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+INTENTS = discord.Intents.default()
+INTENTS.message_content = True
+bot = commands.Bot(command_prefix="!", intents=INTENTS)
 
-# --- Helper Functions ---
-def extract_between(text, start, end):
-    try:
-        return text.split(start)[1].split(end)[0].strip()
-    except IndexError:
-        return "Not found"
+# --- إعداد قاعدة البيانات SQLite ---
+DB_PATH = "ffs_bot_data.db"
 
-def setup_driver():
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS player_stats (
+                player_name TEXT,
+                date TEXT,
+                points INTEGER,
+                goals INTEGER,
+                assists INTEGER,
+                saves INTEGER,
+                wins INTEGER,
+                PRIMARY KEY(player_name, date)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS records (
+                player_name TEXT PRIMARY KEY,
+                max_goals INTEGER,
+                max_points INTEGER
+            )
+        """)
+        await db.commit()
+
+# --- دالة لجلب بيانات اللاعب من الموقع باستخدام Selenium ---
+def scrape_player(player_name):
     options = webdriver.ChromeOptions()
     options.binary_location = CHROME_BINARY_PATH
     options.add_argument("--headless")
@@ -46,44 +61,17 @@ def setup_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
+
     service = Service(CHROMEDRIVER_PATH)
-    return webdriver.Chrome(service=service, options=options)
+    driver = webdriver.Chrome(service=service, options=options)
 
-def create_stats_image(player_data):
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    stats = {
-        'Points': int(player_data['carball_points'].replace(',', '')),
-        'Wins': int(player_data['winning_games'].replace(',', '')),
-        'Goals': int(player_data['scored_goals'].replace(',', '')),
-        'Assists': int(player_data['assists'].replace(',', '')),
-        'Saves': int(player_data['saved_gk'].replace(',', ''))
-    }
-    
-    colors = ['#FF5733', '#33FF57', '#3357FF', '#F333FF', '#FF33F3']
-    bars = ax.bar(stats.keys(), stats.values(), color=colors)
-    
-    ax.set_title(f"{player_data['username']}'s Statistics", fontsize=16, pad=20)
-    ax.set_ylabel('Count', fontsize=12)
-    
-    for bar in bars:
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height,
-                f'{height:,}',
-                ha='center', va='bottom', fontsize=10)
-    
-    plt.tight_layout()
-    
-    buf = BytesIO()
-    plt.savefig(buf, format='png', dpi=100)
-    plt.close()
-    buf.seek(0)
-    return buf
+    def extract_between(text, start, end):
+        try:
+            return text.split(start)[1].split(end)[0].strip()
+        except IndexError:
+            return "Not found"
 
-# --- Player Scraping Functions ---
-def scrape_player(player_name):
-    driver = setup_driver()
-    
     try:
         driver.get(BASE_URL)
         search_field = WebDriverWait(driver, 10).until(
@@ -105,578 +93,239 @@ def scrape_player(player_name):
         driver.get(profile_url)
         time.sleep(5)
 
-        try:
-            clan_element = WebDriverWait(driver, 5).until(
-                EC.presence_of_element_located((
-                    By.XPATH,
-                    "//div[contains(@class,'ww_box') and contains(@class,'profileStats')]//div[contains(text(),'Clan')]/span/b/a"
-                ))
-            )
-            clan = clan_element.text.strip()
-        except:
-            clan = "Unknown"
-
         body_text = driver.find_element(By.TAG_NAME, "body").text
 
         username = extract_between(body_text, "Member List", "Log in").split()[-1]
-        nickname = extract_between(body_text, "Name", "Clan")
-        join_date = extract_between(body_text, "last seen", "join date")
+        clan = "Unknown"
+        try:
+            clan_element = driver.find_element(By.XPATH, "//div[contains(@class,'ww_box') and contains(@class,'profileStats')]//div[contains(text(),'Clan')]/span/b/a")
+            clan = clan_element.text.strip()
+        except:
+            pass
+
         country = extract_between(body_text, "Country", "Last Visit")
-        carball_points = extract_between(body_text, "CarBall", "Won").split()[0]
-        winning_games = extract_between(body_text, "Won:", "|").split()[0]
-        scored_goals = extract_between(body_text, "Goals:", "|").split()[0]
-        assists = extract_between(body_text, "Assists:", "Saves").split()[0]
-        saved_gk = extract_between(body_text, "Saves:", "|").split()[0]
+        carball_points = int(extract_between(body_text, "CarBall", "Won").split()[0])
+        winning_games = int(extract_between(body_text, "Won:", "|").split()[0])
+        scored_goals = int(extract_between(body_text, "Goals:", "|").split()[0])
+        assists = int(extract_between(body_text, "Assists:", "Saves").split()[0])
+        saved_gk = int(extract_between(body_text, "Saves:", "|").split()[0])
 
-        # Store player stats for tracking
-        today = datetime.now().date()
-        if username not in player_stats_db:
-            player_stats_db[username] = {
-                'weekly_stats': {},
-                'records': {
-                    'goals_in_match': 0,
-                    'saves_in_match': 0,
-                    'highest_points': 0
-                }
-            }
-        
-        # Check for new records
-        goals = int(scored_goals.replace(',', ''))
-        saves = int(saved_gk.replace(',', ''))
-        points = int(carball_points.replace(',', ''))
-        
-        if goals > player_stats_db[username]['records']['goals_in_match']:
-            player_stats_db[username]['records']['goals_in_match'] = goals
-            record_alert = f"🎉 New record! {username} achieved {goals} goals in a match!"
-        else:
-            record_alert = None
-        
-        # Store weekly stats
-        if str(today) not in player_stats_db[username]['weekly_stats']:
-            player_stats_db[username]['weekly_stats'][str(today)] = {
-                'goals': goals,
-                'wins': int(winning_games.replace(',', '')),
-                'saves': saves,
-                'points': points
-            }
-
-        result_data = {
+        return {
             "username": username,
             "clan": clan,
             "country": country,
-            "join_date": join_date,
-            "carball_points": carball_points,
-            "winning_games": winning_games,
-            "scored_goals": scored_goals,
+            "points": carball_points,
+            "wins": winning_games,
+            "goals": scored_goals,
             "assists": assists,
-            "saved_gk": saved_gk,
-            "profile_url": profile_url,
-            "record_alert": record_alert
+            "saves": saved_gk,
+            "profile_url": profile_url
         }
-
-        return result_data
-
     except Exception as e:
         print(traceback.format_exc())
-        return {"error": f"❌ An error occurred: {str(e)}"}
-
+        return None
     finally:
         driver.quit()
 
-def scrape_top_players(metric='points', limit=10):
-    driver = setup_driver()
-    
-    try:
-        driver.get(CLAN_URL)
-        time.sleep(5)
-        
-        players = []
-        rows = driver.find_elements(By.CSS_SELECTOR, "table.stats.clan tbody tr")
-        
-        for row in rows:
-            try:
-                name = row.find_element(By.CSS_SELECTOR, "td:nth-child(2) a").text
-                points = row.find_element(By.CSS_SELECTOR, "td:nth-child(3)").text
-                wins = row.find_element(By.CSS_SELECTOR, "td:nth-child(4)").text
-                goals = row.find_element(By.CSS_SELECTOR, "td:nth-child(5)").text
-                assists = row.find_element(By.CSS_SELECTOR, "td:nth-child(6)").text
-                saves = row.find_element(By.CSS_SELECTOR, "td:nth-child(7)").text
-                
-                players.append({
-                    'name': name,
-                    'points': int(points.replace(',', '')),
-                    'wins': int(wins.replace(',', '')),
-                    'goals': int(goals.replace(',', '')),
-                    'assists': int(assists.replace(',', '')),
-                    'saves': int(saves.replace(',', ''))
-                })
-            except:
-                continue
-        
-        # Sort by selected metric
-        if metric == 'points':
-            players.sort(key=lambda x: x['points'], reverse=True)
-        elif metric == 'goals':
-            players.sort(key=lambda x: x['goals'], reverse=True)
-        elif metric == 'saves':
-            players.sort(key=lambda x: x['saves'], reverse=True)
-        elif metric == 'wins':
-            players.sort(key=lambda x: x['wins'], reverse=True)
-        
-        return players[:limit]
-    
-    finally:
-        driver.quit()
+# --- دالة لحفظ البيانات في قاعدة البيانات ---
+async def save_player_stats(data):
+    async with aiosqlite.connect(DB_PATH) as db:
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        await db.execute("""
+            INSERT OR REPLACE INTO player_stats (player_name, date, points, goals, assists, saves, wins)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (data["username"], today, data["points"], data["goals"], data["assists"], data["saves"], data["wins"]))
+        await db.commit()
 
-# --- Clan Management Functions ---
-def scrape_clan_status():
-    driver = setup_driver()
-    
-    clan_data = {
-        "name": "Goalacticos",
-        "description": "No description available",
-        "tag": "Gs_",
-        "members": "0",
-        "clan_wars": "0",
-        "ranked": "0 - 0W - 0L",
-        "unranked": "0",
-        "win_ratio": "0%",
-        "bank": "$0",
-        "online_players": []
-    }
+# --- دالة لتحليل التقدم الأسبوعي ---
+async def get_weekly_progress(player_name):
+    async with aiosqlite.connect(DB_PATH) as db:
+        today = datetime.utcnow().date()
+        this_week = today - timedelta(days=today.weekday())  # بداية الأسبوع الحالي (الاثنين)
+        last_week = this_week - timedelta(days=7)
 
-    try:
-        driver.get(CLAN_URL)
-        wait = WebDriverWait(driver, 15)
+        async def get_stats(date):
+            cursor = await db.execute("SELECT points, goals, assists, saves, wins FROM player_stats WHERE player_name=? AND date=?", (player_name, date.strftime("%Y-%m-%d")))
+            row = await cursor.fetchone()
+            return row
 
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")))
+        current_stats = await get_stats(this_week)
+        last_stats = await get_stats(last_week)
 
-        try:
-            desc_element = driver.find_element(By.CSS_SELECTOR, "div[style*='color: rgba(255,255,255,0.5)']")
-            clan_data["description"] = desc_element.text.strip()
-        except NoSuchElementException:
-            pass
+        if not current_stats or not last_stats:
+            return None
 
-        try:
-            members_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(3) div b")
-            clan_data["members"] = members_element.text.strip()
-        except NoSuchElementException:
-            pass
-
-        try:
-            wars_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(4) div b")
-            clan_data["clan_wars"] = wars_element.text.strip()
-        except NoSuchElementException:
-            pass
-
-        try:
-            ranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(5) div b")
-            clan_data["ranked"] = ranked_element.text.strip()
-        except NoSuchElementException:
-            pass
-
-        try:
-            unranked_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(6) div b")
-            clan_data["unranked"] = unranked_element.text.strip()
-        except NoSuchElementException:
-            pass
-
-        try:
-            win_ratio_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(7) div b")
-            clan_data["win_ratio"] = win_ratio_element.text.strip()
-        except NoSuchElementException:
-            pass
-
-        try:
-            bank_element = driver.find_element(By.CSS_SELECTOR, ".wwClanInfo:nth-child(8) div b")
-            clan_data["bank"] = bank_element.text.strip()
-        except NoSuchElementException:
-            pass
-
-        try:
-            player_rows = driver.find_elements(By.CSS_SELECTOR, "table.fullwidth.dark.stats.clan tbody tr:not(.spacer)")
-            clan_data["online_players"] = []
-            for row in player_rows:
-                try:
-                    username = row.find_element(By.CSS_SELECTOR, "td:nth-child(2) a span").text.strip()
-                    server_status = row.find_element(By.CSS_SELECTOR, "td:nth-child(5)").text.strip()
-                    if "Online" in server_status:
-                        clan_data["online_players"].append(username)
-                except NoSuchElementException:
-                    continue
-            clan_data["members"] = str(len(player_rows))
-        except NoSuchElementException:
-            pass
-
-        return clan_data
-
-    finally:
-        driver.quit()
-
-# --- Challenge System ---
-def create_weekly_challenges():
-    challenges = [
-        {"name": "Goal Scorer", "target": 50, "metric": "goals", "reward": "🏆 Golden Boot"},
-        {"name": "Wall of Defense", "target": 30, "metric": "saves", "reward": "🛡️ Defender Badge"},
-        {"name": "Playmaker", "target": 25, "metric": "assists", "reward": "🎯 Playmaker Medal"},
-        {"name": "Winner", "target": 15, "metric": "wins", "reward": "🏅 Winner Crown"}
-    ]
-    
-    for challenge in challenges:
-        clan_challenges[challenge['name']] = {
-            "target": challenge['target'],
-            "metric": challenge['metric'],
-            "reward": challenge['reward'],
-            "participants": {},
-            "completed": []
+        diff = tuple(c - l for c, l in zip(current_stats, last_stats))
+        return {
+            "points_diff": diff[0],
+            "goals_diff": diff[1],
+            "assists_diff": diff[2],
+            "saves_diff": diff[3],
+            "wins_diff": diff[4],
+            "current": current_stats,
+            "last": last_stats
         }
 
-# --- Bot Commands ---
+# --- دالة التحقق من الأرقام القياسية وإرسال تهنئة ---
+async def check_records_and_congratulate(channel, data):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT max_goals, max_points FROM records WHERE player_name=?", (data["username"],))
+        row = await cursor.fetchone()
+        if row:
+            max_goals, max_points = row
+        else:
+            max_goals, max_points = 0, 0
+
+        congratulated = False
+        if data["goals"] > max_goals:
+            await db.execute("INSERT OR REPLACE INTO records (player_name, max_goals, max_points) VALUES (?, ?, ?)", (data["username"], data["goals"], max_points))
+            congratulated = True
+            await channel.send(f"🎉 تهانينا لـ **{data['username']}** لكسر الرقم القياسي لأكبر عدد أهداف: {data['goals']}!")
+
+        if data["points"] > max_points:
+            await db.execute("INSERT OR REPLACE INTO records (player_name, max_goals, max_points) VALUES (?, ?, ?)", (data["username"], max_goals, data["points"]))
+            congratulated = True
+            await channel.send(f"🏆 تهانينا لـ **{data['username']}** لكسر الرقم القياسي لأكبر نقاط CarBall: {data['points']}!")
+
+        if congratulated:
+            await db.commit()
+
+# --- دالة إنشاء بطاقة صورة للاعب ---
+def create_player_card(data):
+    width, height = 600, 350
+    background_color = (30, 30, 30)
+    text_color = (255, 255, 255)
+    accent_color = (218, 165, 32)  # ذهبي
+
+    img = Image.new("RGB", (width, height), background_color)
+    draw = ImageDraw.Draw(img)
+
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"  # تأكد من توفر الخط أو عدله لمسار خط مناسب
+    font_large = ImageFont.truetype(font_path, 30)
+    font_medium = ImageFont.truetype(font_path, 20)
+    font_small = ImageFont.truetype(font_path, 16)
+
+    draw.text((20, 20), f"Player: {data['username']}", fill=accent_color, font=font_large)
+    draw.text((20, 60), f"Clan: {data['clan']}", fill=text_color, font=font_medium)
+    draw.text((20, 90), f"Country: {data['country']}", fill=text_color, font=font_medium)
+    draw.text((20, 130), f"CarBall Points: {data['points']}", fill=accent_color, font=font_medium)
+    draw.text((20, 160), f"Wins: {data['wins']}", fill=text_color, font=font_medium)
+    draw.text((20, 190), f"Goals: {data['goals']}", fill=text_color, font=font_medium)
+    draw.text((20, 220), f"Assists: {data['assists']}", fill=text_color, font=font_medium)
+    draw.text((20, 250), f"Saves: {data['saves']}", fill=text_color, font=font_medium)
+
+    # رابط البروفايل
+    draw.text((20, 290), f"Profile: {data['profile_url']}", fill=accent_color, font=font_small)
+
+    with io.BytesIO() as image_binary:
+        img.save(image_binary, 'PNG')
+        image_binary.seek(0)
+        return image_binary
+
+# --- أمر جلب بيانات اللاعب ---
 @bot.command(name="ffs")
 async def ffs(ctx, player_name: str = None):
     if not player_name:
-        await ctx.send("❌ Please provide the player name. Example: `!ffs anasmorocco`")
+        await ctx.send("❌ الرجاء إدخال اسم اللاعب. مثال: `!ffs anasmorocco`")
         return
-
-    await ctx.send(f"🔍 Searching for player **{player_name}**... This may take a few seconds.")
-
-    player_data = scrape_player(player_name)
-    
-    if "error" in player_data:
-        await ctx.send(player_data["error"])
+    await ctx.send(f"🔍 جاري البحث عن اللاعب **{player_name}**... يرجى الانتظار.")
+    data = await asyncio.to_thread(scrape_player, player_name)
+    if not data:
+        await ctx.send("❌ لم أتمكن من العثور على بيانات اللاعب أو حدث خطأ.")
         return
-    
-    # Send graphical card
-    image_buf = create_stats_image(player_data)
-    file = discord.File(image_buf, filename="player_stats.png")
-    
-    embed = discord.Embed(
-        title=f"🎮 {player_data['username']}'s Profile",
-        color=0x00ff00
-    )
-    embed.add_field(name="👥 Clan", value=player_data['clan'], inline=True)
-    embed.add_field(name="🌍 Country", value=player_data['country'], inline=True)
-    embed.add_field(name="📅 Join Date", value=player_data['join_date'], inline=True)
-    embed.add_field(name="🏆 CarBall Points", value=player_data['carball_points'], inline=True)
-    embed.add_field(name="🎯 Wins", value=player_data['winning_games'], inline=True)
-    embed.add_field(name="⚽ Goals", value=player_data['scored_goals'], inline=True)
-    embed.add_field(name="🎖 Assists", value=player_data['assists'], inline=True)
-    embed.add_field(name="🧤 Saves", value=player_data['saved_gk'], inline=True)
-    embed.set_image(url="attachment://player_stats.png")
-    embed.set_footer(text=f"🔗 Full Profile: {player_data['profile_url']}")
-    
-    await ctx.send(file=file, embed=embed)
-    
-    # Send record alert if any
-    if player_data.get('record_alert'):
-        await ctx.send(player_data['record_alert'])
+    # حفظ البيانات
+    await save_player_stats(data)
+    # التحقق من الأرقام القياسية
+    await check_records_and_congratulate(ctx.channel, data)
+    # إنشاء البطاقة وإرسالها
+    image_binary = create_player_card(data)
+    file = discord.File(fp=image_binary, filename="player_card.png")
+    await ctx.send(file=file)
 
+# --- أمر عرض أفضل اللاعبين ---
 @bot.command(name="top")
-async def top_players(ctx, metric: str = "points"):
-    valid_metrics = ['points', 'goals', 'saves', 'wins', 'assists']
-    
-    if metric not in valid_metrics:
-        await ctx.send(f"❌ Invalid metric. Please use one of: {', '.join(valid_metrics)}")
+async def top(ctx, stat: str = "points"):
+    valid_stats = ["points", "goals", "assists", "saves", "wins"]
+    if stat not in valid_stats:
+        await ctx.send(f"❌ اختر إحصائية صحيحة من: {', '.join(valid_stats)}")
         return
-    
-    await ctx.send(f"🏆 Fetching top 10 players by {metric}...")
-    
-    top_players = scrape_top_players(metric)
-    
-    if not top_players:
-        await ctx.send("❌ Could not retrieve top players list.")
-        return
-    
-    embed = discord.Embed(
-        title=f"🏅 Top 10 Players by {metric.capitalize()}",
-        color=0xffd700
-    )
-    
-    for i, player in enumerate(top_players, 1):
-        embed.add_field(
-            name=f"{i}. {player['name']}",
-            value=f"{metric.capitalize()}: {player[metric]:,}",
-            inline=False
-        )
-    
-    await ctx.send(embed=embed)
 
-@bot.command(name="compare")
-async def compare_players(ctx, player1: str, player2: str):
-    await ctx.send(f"⚖️ Comparing **{player1}** and **{player2}**...")
-    
-    p1_data = scrape_player(player1)
-    p2_data = scrape_player(player2)
-    
-    if "error" in p1_data or "error" in p2_data:
-        await ctx.send("❌ Could not retrieve data for one or both players.")
-        return
-    
-    embed = discord.Embed(
-        title=f"⚔️ {p1_data['username']} vs {p2_data['username']}",
-        color=0x7289da
-    )
-    
-    # Compare stats
-    stats_to_compare = [
-        ('carball_points', '🏆 Points'),
-        ('winning_games', '🎯 Wins'),
-        ('scored_goals', '⚽ Goals'),
-        ('assists', '🎖 Assists'),
-        ('saved_gk', '🧤 Saves')
-    ]
-    
-    for stat, label in stats_to_compare:
-        p1_val = int(p1_data[stat].replace(',', ''))
-        p2_val = int(p2_data[stat].replace(',', ''))
-        
-        if p1_val > p2_val:
-            winner = f"**{p1_data['username']}** leads"
-        elif p2_val > p1_val:
-            winner = f"**{p2_data['username']}** leads"
-        else:
-            winner = "Tie"
-            
-        embed.add_field(
-            name=label,
-            value=f"{p1_data['username']}: {p1_val:,}\n{p2_data['username']}: {p2_val:,}\n{winner}",
-            inline=True
-        )
-    
-    await ctx.send(embed=embed)
+    async with aiosqlite.connect(DB_PATH) as db:
+        # آخر تاريخ متوفر
+        cursor = await db.execute("SELECT DISTINCT date FROM player_stats ORDER BY date DESC LIMIT 1")
+        row = await cursor.fetchone()
+        if not row:
+            await ctx.send("❌ لا توجد بيانات حالياً.")
+            return
+        last_date = row[0]
 
+        cursor = await db.execute(f"""
+            SELECT player_name, {stat} FROM player_stats
+            WHERE date=?
+            ORDER BY {stat} DESC
+            LIMIT 5
+        """, (last_date,))
+        rows = await cursor.fetchall()
+        if not rows:
+            await ctx.send("❌ لا توجد بيانات لعرضها.")
+            return
+
+        msg = f"🏆 أفضل 5 لاعبين حسب {stat} (تاريخ {last_date}):\n"
+        for i, (player, value) in enumerate(rows, 1):
+            msg += f"{i}. {player} - {value}\n"
+        await ctx.send(msg)
+
+# --- أمر تقرير التقدم الأسبوعي ---
 @bot.command(name="progress")
-async def player_progress(ctx, player_name: str = None):
+async def progress(ctx, player_name: str = None):
     if not player_name:
-        await ctx.send("❌ Please provide the player name. Example: `!progress anasmorocco`")
+        await ctx.send("❌ الرجاء إدخال اسم اللاعب. مثال: `!progress anasmorocco`")
         return
-    
-    if player_name not in player_stats_db:
-        await ctx.send("ℹ️ No historical data available for this player yet.")
+    progress = await get_weekly_progress(player_name)
+    if not progress:
+        await ctx.send("❌ لا توجد بيانات كافية لتقرير التقدم لهذا اللاعب.")
         return
-    
-    today = datetime.now().date()
-    week_ago = today - timedelta(days=7)
-    
-    current_week = {k: v for k, v in player_stats_db[player_name]['weekly_stats'].items() 
-                   if datetime.strptime(k, "%Y-%m-%d").date() >= week_ago}
-    last_week = {k: v for k, v in player_stats_db[player_name]['weekly_stats'].items() 
-                if datetime.strptime(k, "%Y-%m-%d").date() < week_ago 
-                and datetime.strptime(k, "%Y-%m-%d").date() >= week_ago - timedelta(days=7)}
-    
-    if not current_week or not last_week:
-        await ctx.send("ℹ️ Not enough data to show progress.")
+    msg = (
+        f"📊 تقرير التقدم الأسبوعي لـ **{player_name}**:\n"
+        f"النقاط: +{progress['points_diff']}\n"
+        f"الأهداف: +{progress['goals_diff']}\n"
+        f"التمريرات الحاسمة: +{progress['assists_diff']}\n"
+        f"التصديات: +{progress['saves_diff']}\n"
+        f"الأنتصارات: +{progress['wins_diff']}"
+    )
+    await ctx.send(msg)
+
+# --- أمر مقارنة بين لاعبين ---
+@bot.command(name="compare")
+async def compare(ctx, player1: str = None, player2: str = None):
+    if not player1 or not player2:
+        await ctx.send("❌ الرجاء إدخال اسمي لاعبين. مثال: `!compare Wassym Player`")
         return
-    
-    # Calculate totals
-    current_totals = {
-        'goals': sum(day['goals'] for day in current_week.values()),
-        'wins': sum(day['wins'] for day in current_week.values()),
-        'saves': sum(day['saves'] for day in current_week.values()),
-        'points': sum(day['points'] for day in current_week.values())
-    }
-    
-    last_totals = {
-        'goals': sum(day['goals'] for day in last_week.values()),
-        'wins': sum(day['wins'] for day in last_week.values()),
-        'saves': sum(day['saves'] for day in last_week.values()),
-        'points': sum(day['points'] for day in last_week.values())
-    }
-    
-    # Calculate progress
-    progress = {
-        'goals': current_totals['goals'] - last_totals['goals'],
-        'wins': current_totals['wins'] - last_totals['wins'],
-        'saves': current_totals['saves'] - last_totals['saves'],
-        'points': current_totals['points'] - last_totals['points']
-    }
-    
-    embed = discord.Embed(
-        title=f"📈 {player_name}'s Weekly Progress",
-        description="Comparison with last week",
-        color=0x3498db
-    )
-    
-    for stat in ['goals', 'wins', 'saves', 'points']:
-        diff = progress[stat]
-        if diff > 0:
-            emoji = "📈"
-            status = f"+{diff} (Improving)"
-        elif diff < 0:
-            emoji = "📉"
-            status = f"{diff} (Declining)"
-        else:
-            emoji = "➖"
-            status = "No change"
-            
-        embed.add_field(
-            name=f"{emoji} {stat.capitalize()}",
-            value=f"This week: {current_totals[stat]}\nLast week: {last_totals[stat]}\n{status}",
-            inline=True
-        )
-    
-    await ctx.send(embed=embed)
-
-@bot.command(name="challenges")
-async def show_challenges(ctx):
-    if not clan_challenges:
-        create_weekly_challenges()
-    
-    embed = discord.Embed(
-        title="🏅 Weekly Clan Challenges",
-        description="Complete these challenges to earn rewards!",
-        color=0xe67e22
-    )
-    
-    for name, challenge in clan_challenges.items():
-        embed.add_field(
-            name=f"🎯 {name}",
-            value=f"Target: {challenge['target']} {challenge['metric']}\nReward: {challenge['reward']}",
-            inline=False
-        )
-    
-    await ctx.send(embed=embed)
-
-@bot.command(name="join_challenge")
-async def join_challenge(ctx, challenge_name: str = None):
-    if not challenge_name:
-        await ctx.send("❌ Please specify a challenge name. Use `!challenges` to see available challenges.")
+    await ctx.send(f"🔍 جاري مقارنة **{player1}** و **{player2}** ...")
+    data1 = await asyncio.to_thread(scrape_player, player1)
+    data2 = await asyncio.to_thread(scrape_player, player2)
+    if not data1 or not data2:
+        await ctx.send("❌ لم أتمكن من جلب بيانات أحد اللاعبين.")
         return
-    
-    if challenge_name not in clan_challenges:
-        await ctx.send("❌ Challenge not found. Use `!challenges` to see available challenges.")
-        return
-    
-    player_name = ctx.author.name
-    clan_challenges[challenge_name]['participants'][player_name] = 0
-    await ctx.send(f"✅ {player_name} has joined the {challenge_name} challenge!")
-
-@bot.command(name="clan")
-async def clan_status(ctx):
-    clan_data = scrape_clan_status()
-    
-    online_count = len(clan_data["online_players"])
-    members_count = clan_data["members"]
-    online_list = ", ".join(clan_data["online_players"]) if online_count > 0 else "No players online"
-    
-    embed = discord.Embed(
-        title=f"🛡️ {clan_data['name']} [{clan_data['tag']}]",
-        description=clan_data["description"],
-        color=0xdaa520
+    msg = (
+        f"⚔️ مقارنة بين **{data1['username']}** و **{data2['username']}**:\n"
+        f"النقاط: {data1['points']} - {data2['points']}\n"
+        f"الأهداف: {data1['goals']} - {data2['goals']}\n"
+        f"التمريرات الحاسمة: {data1['assists']} - {data2['assists']}\n"
+        f"التصديات: {data1['saves']} - {data2['saves']}\n"
+        f"الأنتصارات: {data1['wins']} - {data2['wins']}\n"
     )
-    embed.add_field(
-        name="📊 Clan Statistics",
-        value=(
-            f"👥 Members: {members_count}\n"
-            f"⚔️ Clan Wars: {clan_data['clan_wars']}\n"
-            f"🏆 Ranked: {clan_data['ranked']}\n"
-            f"🔓 Unranked: {clan_data['unranked']}\n"
-            f"📈 Win Ratio: {clan_data['win_ratio']}\n"
-            f"💰 Bank Balance: {clan_data['bank']}"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name=f"👤 Online Members ({online_count}/{members_count})",
-        value=online_list,
-        inline=False
-    )
-    
-    await ctx.send(embed=embed)
+    await ctx.send(msg)
 
-@bot.command(name="records")
-async def player_records(ctx, player_name: str = None):
-    if not player_name:
-        player_name = ctx.author.name
-    
-    if player_name not in player_stats_db:
-        await ctx.send("ℹ️ No records found for this player.")
-        return
-    
-    records = player_stats_db[player_name]['records']
-    
-    embed = discord.Embed(
-        title=f"🏆 {player_name}'s Records",
-        color=0x9b59b6
-    )
-    embed.add_field(name="⚽ Most Goals in a Match", value=records['goals_in_match'], inline=True)
-    embed.add_field(name="🧤 Most Saves in a Match", value=records['saves_in_match'], inline=True)
-    embed.add_field(name="🏅 Highest Points", value=records['highest_points'], inline=True)
-    
-    await ctx.send(embed=embed)
-
-@bot.command(name="help_bot")
-async def help_command(ctx):
-    embed = discord.Embed(
-        title="🤖 FFS.gg Bot Help",
-        description="Here are all available commands:",
-        color=0x3498db
-    )
-    
-    commands = [
-        ("!ffs [player]", "Get player statistics with graphical card"),
-        ("!top [metric]", "Show top players by points/goals/saves/wins"),
-        ("!compare [player1] [player2]", "Compare two players' stats"),
-        ("!progress [player]", "Show weekly progress compared to last week"),
-        ("!challenges", "Show current weekly challenges"),
-        ("!join_challenge [name]", "Join a weekly challenge"),
-        ("!clan", "Show clan status and online members"),
-        ("!records [player]", "Show player records"),
-        ("!help_bot", "Show this help message")
-    ]
-    
-    for cmd, desc in commands:
-        embed.add_field(name=cmd, value=desc, inline=False)
-    
-    await ctx.send(embed=embed)
-
-# --- Background Tasks ---
-@tasks.loop(hours=12)
-async def update_clan_status():
-    channel = bot.get_channel(1404474899564597308)  # Your clan channel ID
-    if channel:
-        clan_data = scrape_clan_status()
-        
-        online_count = len(clan_data["online_players"])
-        members_count = clan_data["members"]
-        online_list = ", ".join(clan_data["online_players"]) if online_count > 0 else "No players online"
-        
-        embed = discord.Embed(
-            title=f"🛡️ {clan_data['name']} [{clan_data['tag']}] Status Update",
-            color=0xdaa520
-        )
-        embed.add_field(name="👥 Members Online", value=f"{online_count}/{members_count}", inline=True)
-        embed.add_field(name="💰 Clan Bank", value=clan_data["bank"], inline=True)
-        embed.add_field(name="🏆 Ranked Record", value=clan_data["ranked"], inline=True)
-        embed.add_field(name="🌐 Online Players", value=online_list, inline=False)
-        
-        await channel.send(embed=embed)
-
-@tasks.loop(hours=24)
-async def check_challenge_progress():
-    # This would check player progress in challenges and update accordingly
-    pass
-
-@tasks.loop(hours=168)  # Weekly
-async def reset_challenges():
-    create_weekly_challenges()
-    channel = bot.get_channel(1404474899564597308)  # Your clan channel ID
-    if channel:
-        await channel.send("🔄 Weekly challenges have been reset! Use `!challenges` to see the new challenges.")
+# --- مهمة تحديث دورية لجلب بيانات يومية لأكثر اللاعبين استخدامًا (تطوير لاحق) ---
+# يمكن تطويرها لتحديث بيانات الكلان مثلا
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    print("------")
-    
-    # Start background tasks
-    update_clan_status.start()
-    check_challenge_progress.start()
-    reset_challenges.start()
-    
-    # Create initial challenges if none exist
-    if not clan_challenges:
-        create_weekly_challenges()
+    await init_db()
+    print("Database initialized.")
+    # يمكنك هنا تشغيل مهام دورية إذا أردت، مثل تحديث الكلان
+    # start_your_task.start()
 
-# Run the bot
-bot.run(os.getenv("DISCORD_BOT_TOKEN"))
+bot.run(DISCORD_BOT_TOKEN)
